@@ -3,30 +3,63 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Code Playground</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600&display=swap">
+  <title>CtrlSaptam</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app">
+  <div class="app" id="app">
     <header class="top">
-      <div class="brand"><span class="mark" aria-hidden="true">&lt;/&gt;</span><h1>Code Playground</h1></div>
-      <div class="seg view-seg" role="group" aria-label="Visible pane">
-        <button type="button" id="v-code" aria-pressed="true">Code</button>
-        <button type="button" id="v-prev" aria-pressed="false">Preview</button>
+      <div class="brand">
+        <!-- Logo: to use your own image, replace this <svg> with <img class="logo" src="logo.png" alt="CtrlSaptam"> -->
+        <svg class="logo" viewBox="0 0 32 32" role="img" aria-label="CtrlSaptam logo">
+          <rect class="logo-bg" width="32" height="32" rx="9"/>
+          <text class="logo-s" x="6.5" y="23.5">S</text>
+          <rect class="logo-cursor" x="19.5" y="21" width="7" height="3" rx="1.5"/>
+        </svg>
+        <h1><span>Ctrl</span>Saptam</h1>
       </div>
+
+      <div class="seg view-seg" id="view-seg" role="group" aria-label="Visible panes">
+        <button type="button" data-view="code" aria-pressed="false">Code</button>
+        <button type="button" data-view="both" aria-pressed="true">Both</button>
+        <button type="button" data-view="preview" aria-pressed="false">Preview</button>
+      </div>
+
       <div class="actions">
         <span class="status" id="status" role="status" aria-live="polite"></span>
         <label class="switch"><input type="checkbox" id="auto" checked><span class="track"></span><span>Auto-run</span></label>
         <button type="button" class="btn primary" id="run" title="Run (Ctrl/Cmd + Enter)">Run</button>
-        <button type="button" class="btn" id="copy">Copy tab</button>
-        <button type="button" class="btn" id="sample">Sample</button>
-        <button type="button" class="btn" id="clear">Clear all</button>
-        <button type="button" class="btn layout-btn" id="layout">Stack</button>
+
+        <div class="seg" id="layouts" role="group" aria-label="Layout">
+          <button type="button" class="lo-h" data-layout="cols" aria-pressed="true" title="Code left, preview right" aria-label="Code left, preview right">
+            <svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><rect x=".75" y=".75" width="18.5" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 1v12" stroke="currentColor" stroke-width="1.5"/><rect x="11.2" y="2.2" width="6.6" height="9.6" rx="1" fill="currentColor" opacity=".5"/></svg>
+          </button>
+          <button type="button" class="lo-h" data-layout="cols-rev" aria-pressed="false" title="Preview left, code right" aria-label="Preview left, code right">
+            <svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><rect x=".75" y=".75" width="18.5" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 1v12" stroke="currentColor" stroke-width="1.5"/><rect x="2.2" y="2.2" width="6.6" height="9.6" rx="1" fill="currentColor" opacity=".5"/></svg>
+          </button>
+          <button type="button" class="lo-v" data-layout="rows" aria-pressed="false" title="Code top, preview bottom" aria-label="Code top, preview bottom">
+            <svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><rect x=".75" y=".75" width="18.5" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1 7h18" stroke="currentColor" stroke-width="1.5"/><rect x="2.2" y="8.2" width="15.6" height="3.6" rx="1" fill="currentColor" opacity=".5"/></svg>
+          </button>
+          <button type="button" class="lo-v" data-layout="rows-rev" aria-pressed="false" title="Preview top, code bottom" aria-label="Preview top, code bottom">
+            <svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true"><rect x=".75" y=".75" width="18.5" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1 7h18" stroke="currentColor" stroke-width="1.5"/><rect x="2.2" y="2.2" width="15.6" height="3.6" rx="1" fill="currentColor" opacity=".5"/></svg>
+          </button>
+        </div>
+
+        <button type="button" class="btn" id="phone" aria-pressed="false" title="Wrap everything in a 9:16 phone frame for recording">Phone</button>
+
+        <div class="menu-wrap">
+          <button type="button" class="btn" id="more" aria-haspopup="true" aria-expanded="false">More</button>
+          <div class="menu" id="menu" hidden>
+            <button type="button" class="item" id="copy">Copy tab</button>
+            <button type="button" class="item" id="sample">Load sample</button>
+            <button type="button" class="item" id="clear">Clear all</button>
+          </div>
+        </div>
       </div>
     </header>
 
-    <div class="stage" id="stage" data-layout="cols" data-view="code">
+    <div class="stage" id="stage" data-dir="cols" data-rev="0" data-view="both">
       <section class="pane editor-pane" aria-label="Code editor">
         <div class="tabs" role="tablist" aria-label="Files">
           <button type="button" class="tab" role="tab" data-id="html" aria-selected="true"><span class="dot"></span>index.html</button>
@@ -58,12 +91,18 @@
           </div>
         </div>
         <div class="frame-wrap" id="fw" data-device="fit">
-          <iframe id="frame" title="Live preview" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>
+          <div class="frames" id="frames">
+            <iframe id="frame-a" title="Live preview" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>
+            <iframe id="frame-b" title="Live preview" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>
+          </div>
         </div>
         <div class="console" id="console" hidden>
           <div class="console-head">
             <span class="pv-title">Console</span>
-            <button type="button" class="btn sm" id="console-clear">Clear</button>
+            <span class="console-actions">
+              <button type="button" class="btn sm" id="console-clear">Clear</button>
+              <button type="button" class="btn sm" id="console-hide">Hide</button>
+            </span>
           </div>
           <div class="console-body" id="console-body"></div>
         </div>

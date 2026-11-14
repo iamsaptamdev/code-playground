@@ -198,18 +198,18 @@
   };
 
   /* ---------- State ---------- */
-  var KEY = 'code-playground-v1';
+  var KEY = 'ctrlsaptam-v1';
   var S = {
     files: { html: SAMPLE.html, css: SAMPLE.css, js: SAMPLE.js },
-    active: 'html', auto: true, layout: 'cols', split: 50, device: 'fit'
+    active: 'html', auto: true, layout: 'cols', split: 50, device: 'fit', phone: false, console: false, view: 'both'
   };
   try {
-    var raw = localStorage.getItem(KEY);
+    var raw = localStorage.getItem(KEY) || localStorage.getItem('code-playground-v1');
     if (raw) {
       var o = JSON.parse(raw);
       if (o && o.files && typeof o.files.html === 'string' && typeof o.files.css === 'string' && typeof o.files.js === 'string') {
         S.files = o.files;
-        ['active', 'auto', 'layout', 'split', 'device'].forEach(function (k) { if (o[k] !== undefined) S[k] = o[k]; });
+        ['active', 'auto', 'layout', 'split', 'device', 'phone', 'console', 'view'].forEach(function (k) { if (o[k] !== undefined) S[k] = o[k]; });
       }
     }
   } catch (e) {}
@@ -221,7 +221,7 @@
 
   /* ---------- Elements ---------- */
   function $(id) { return document.getElementById(id); }
-  var ta = $('ta'), hl = $('hl'), gutterEl = $('gutter'), stage = $('stage'), frame = $('frame'), fw = $('fw');
+  var ta = $('ta'), hl = $('hl'), gutterEl = $('gutter'), stage = $('stage');
   var statusEl = $('status'), autoEl = $('auto'), resizer = $('resizer');
   var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
   var scrollMem = { html: [0, 0], css: [0, 0], js: [0, 0] };
@@ -310,12 +310,11 @@
   }
   tabs.forEach(function (t) { t.addEventListener('click', function () { setActive(t.dataset.id); ta.focus(); }); });
 
-  var runTimer;
   function onInput() {
     S.files[S.active] = ta.value;
     render();
     save();
-    if (S.auto) { clearTimeout(runTimer); runTimer = setTimeout(runPreview, 350); }
+    if (S.auto) scheduleRun();
   }
   ta.addEventListener('input', onInput);
 
@@ -374,8 +373,16 @@
     }
   });
 
-  /* ---------- Preview ---------- */
-  function hook() {
+  /* ---------- Preview ----------
+     Two stacked iframes. A new version of the page loads in the hidden one and is swapped in
+     once it is ready, so the preview never flashes. CSS edits skip the reload completely. */
+  var frameA = $('frame-a'), frameB = $('frame-b');
+  var front = frameA, back = frameB;
+  front.classList.add('is-front');
+  var scrollPos = [0, 0], cssLive = false, runToken = 0, timers = {};
+
+  // This function runs inside the preview page. It is turned into text and injected, so it can't use anything from this file.
+  function hook(scroll) {
     var P = window.parent;
     function str(a) {
       if (typeof a === 'string') return a;
@@ -393,6 +400,8 @@
     });
     window.addEventListener('error', function (e) { send('error', [e.message]); });
     window.addEventListener('unhandledrejection', function (e) { send('error', ['Unhandled promise rejection: ' + str(e.reason)]); });
+
+    // localStorage is blocked in a sandboxed frame, so give the page an in-memory stand-in
     function mk() {
       var m = {};
       return {
@@ -410,37 +419,98 @@
         Object.defineProperty(window, 'sessionStorage', { value: mk(), configurable: true });
       } catch (_) {}
     }
+
+    // Keep the scroll position between updates
+    function restore() { try { window.scrollTo(scroll[0], scroll[1]); } catch (e) {} }
+    document.addEventListener('DOMContentLoaded', restore);
+    window.addEventListener('load', restore);
+    var ticking = false;
+    window.addEventListener('scroll', function () {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function () {
+        ticking = false;
+        try { P.postMessage({ __pg: 2, x: window.scrollX, y: window.scrollY }, '*'); } catch (e) {}
+      });
+    }, { passive: true });
+
+    // Live CSS updates
+    window.addEventListener('message', function (e) {
+      var d = e.data;
+      if (!d || d.__pgcss !== 1 || typeof d.css !== 'string') return;
+      var el = document.getElementById('__pg_css');
+      if (el) el.textContent = d.css;
+    });
   }
-  var HOOK_TAG = '<script>(' + hook.toString() + ')();<\/script>';
+
+  var LINK_RE = /<link\b[^>]*href=["'](?:\.\/)?style\.css["'][^>]*>/i;
+  var SCRIPT_RE = /<script\b[^>]*src=["'](?:\.\/)?script\.js["'][^>]*>\s*<\/script>/i;
+  function styleTag(css) { return '<style id="__pg_css">' + css.replace(/<\/style/gi, '<\\/style') + '</style>'; }
+  function scriptTag(js) { return '<script>' + js.replace(/<\/script/gi, '<\\/script') + '<\/script>'; }
 
   function buildDoc() {
     var html = S.files.html, css = S.files.css, js = S.files.js;
-    var safeCss = css.replace(/<\/style/gi, '<\\/style');
-    var safeJs = js.replace(/<\/script/gi, '<\\/script');
     var usedCss = false, usedJs = false;
-    var out = html.replace(/<link\b[^>]*href=["'](?:\.\/)?style\.css["'][^>]*>/i, function () { usedCss = true; return '<style>' + safeCss + '</style>'; });
-    out = out.replace(/<script\b[^>]*src=["'](?:\.\/)?script\.js["'][^>]*>\s*<\/script>/i, function () { usedJs = true; return '<script>' + safeJs + '<\/script>'; });
+    var out = html.replace(LINK_RE, function () { usedCss = true; return styleTag(css); });
+    out = out.replace(SCRIPT_RE, function () { usedJs = true; return scriptTag(js); });
     if (!usedCss && css.trim()) {
-      if (/<\/head>/i.test(out)) out = out.replace(/<\/head>/i, function (m) { return '<style>' + safeCss + '</style>' + m; });
-      else out = '<style>' + safeCss + '</style>' + out;
+      usedCss = true;
+      if (/<\/head>/i.test(out)) out = out.replace(/<\/head>/i, function (m) { return styleTag(css) + m; });
+      else out = styleTag(css) + out;
     }
     if (!usedJs && js.trim()) {
-      if (/<\/body>/i.test(out)) out = out.replace(/<\/body>/i, function (m) { return '<script>' + safeJs + '<\/script>' + m; });
-      else out = out + '<script>' + safeJs + '<\/script>';
+      if (/<\/body>/i.test(out)) out = out.replace(/<\/body>/i, function (m) { return scriptTag(js) + m; });
+      else out = out + scriptTag(js);
     }
-    if (/<head[^>]*>/i.test(out)) return out.replace(/<head[^>]*>/i, function (m) { return m + HOOK_TAG; });
+    cssLive = usedCss;
+    var hookTag = '<script>(' + hook.toString() + ')(' + JSON.stringify(scrollPos) + ');<\/script>';
+    if (/<head[^>]*>/i.test(out)) return out.replace(/<head[^>]*>/i, function (m) { return m + hookTag; });
     var dt = /^\s*<!doctype[^>]*>/i.exec(out);
-    if (dt) return dt[0] + HOOK_TAG + out.slice(dt[0].length);
-    return HOOK_TAG + out;
+    if (dt) return dt[0] + hookTag + out.slice(dt[0].length);
+    return hookTag + out;
   }
 
   function stamp() { return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
   function flash(text) { statusEl.textContent = text; }
+
+  function postCss() {
+    try { front.contentWindow.postMessage({ __pgcss: 1, css: S.files.css }, '*'); } catch (e) {}
+  }
+  function swap(next) {
+    var old = front;
+    front = next; back = old;
+    front.classList.add('is-front');
+    old.classList.remove('is-front');
+    old.onload = null;
+    old.srcdoc = '<!doctype html><title></title>'; // stops the old page's timers and scripts
+    if (cssLive) postCss();
+  }
+
   function runPreview() {
-    clearTimeout(runTimer);
+    clearTimeout(timers.full); clearTimeout(timers.css); clearTimeout(timers.guard);
     clearConsole();
-    frame.srcdoc = buildDoc();
-    flash('Ran at ' + stamp());
+    var token = ++runToken, next = back, done = false;
+    function ready() {
+      if (done || token !== runToken) return;
+      done = true;
+      next.onload = null;
+      swap(next);
+    }
+    next.onload = ready;
+    timers.guard = setTimeout(ready, 2000); // swap anyway if a slow image or font keeps the page from finishing
+    next.srcdoc = buildDoc();
+    flash('Updated ' + stamp());
+  }
+
+  // Called after every edit when Auto-run is on
+  function scheduleRun() {
+    if (S.active === 'css' && cssLive) {
+      clearTimeout(timers.css);
+      timers.css = setTimeout(function () { postCss(); flash('Styles updated ' + stamp()); }, 50);
+    } else {
+      clearTimeout(timers.full);
+      timers.full = setTimeout(runPreview, 300);
+    }
   }
 
   /* ---------- Console ---------- */
@@ -470,17 +540,26 @@
     conBody.scrollTop = conBody.scrollHeight;
     badge.textContent = String(conCount);
     badge.className = 'badge' + (conErrors ? ' err' : '');
-    if (level === 'error' && conEl.hidden) setConsole(true);
   }
   function setConsole(open) {
     conEl.hidden = !open;
     conToggle.setAttribute('aria-expanded', String(open));
+    S.console = open;
+    save();
   }
   conToggle.addEventListener('click', function () { setConsole(conEl.hidden); });
+  $('console-hide').addEventListener('click', function () { setConsole(false); });
   $('console-clear').addEventListener('click', clearConsole);
+
   window.addEventListener('message', function (e) {
     var d = e.data;
-    if (e.source !== frame.contentWindow || !d || d.__pg !== 1 || !Array.isArray(d.args)) return;
+    if (!d || typeof d !== 'object') return;
+    if (d.__pg === 2) {
+      if (e.source === front.contentWindow) scrollPos = [d.x || 0, d.y || 0];
+      return;
+    }
+    if (d.__pg !== 1 || !Array.isArray(d.args)) return;
+    if (e.source !== front.contentWindow && e.source !== back.contentWindow) return;
     addLine(String(d.level), d.args.map(String));
   });
 
@@ -489,8 +568,15 @@
   $('reload').addEventListener('click', runPreview);
   autoEl.addEventListener('change', function () { S.auto = autoEl.checked; save(); if (S.auto) runPreview(); });
 
+  var moreBtn = $('more'), menu = $('menu');
+  function setMenu(open) { menu.hidden = !open; moreBtn.setAttribute('aria-expanded', String(open)); }
+  moreBtn.addEventListener('click', function (e) { e.stopPropagation(); setMenu(menu.hidden); });
+  document.addEventListener('click', function (e) { if (!menu.hidden && !menu.contains(e.target)) setMenu(false); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setMenu(false); });
+
   $('copy').addEventListener('click', function () {
     var text = ta.value, name = NAMES[S.active];
+    setMenu(false);
     function fallback() {
       ta.focus(); ta.select();
       var ok = false;
@@ -503,6 +589,7 @@
     } catch (e) { fallback(); }
   });
 
+  // Two-step button: the first click asks, the second click does it
   function armed(btn, label, action) {
     var timer, on = false, idle = btn.textContent;
     btn.addEventListener('click', function () {
@@ -520,36 +607,85 @@
     ta.value = S.files[S.active];
     lineCount = 0; render(); save(); runPreview();
   }
-  armed($('sample'), 'Replace all code?', function () { loadAll(SAMPLE); flash('Sample loaded'); });
-  armed($('clear'), 'Clear everything?', function () { loadAll({ html: '', css: '', js: '' }); flash('Cleared'); ta.focus(); });
+  armed($('sample'), 'Replace all code?', function () { setMenu(false); loadAll(SAMPLE); flash('Sample loaded'); });
+  armed($('clear'), 'Clear everything?', function () { setMenu(false); loadAll({ html: '', css: '', js: '' }); flash('Cleared'); ta.focus(); });
 
-  /* ---------- Layout, device and split ---------- */
-  var layoutBtn = $('layout');
-  function applyLayout() {
-    stage.dataset.layout = S.layout;
-    stage.style.setProperty('--split', S.split + '%');
-    resizer.setAttribute('aria-orientation', S.layout === 'cols' ? 'vertical' : 'horizontal');
-    layoutBtn.textContent = S.layout === 'cols' ? 'Stack' : 'Side by side';
-  }
-  layoutBtn.addEventListener('click', function () { S.layout = S.layout === 'cols' ? 'rows' : 'cols'; applyLayout(); save(); });
-
+  /* ---------- Layout, phone frame, preview width ---------- */
+  var appEl = $('app');
+  var LAYOUTS = { 'cols': ['cols', false], 'cols-rev': ['cols', true], 'rows': ['rows', false], 'rows-rev': ['rows', true] };
+  var layoutBtns = Array.prototype.slice.call(document.querySelectorAll('[data-layout]'));
+  var viewBtns = Array.prototype.slice.call(document.querySelectorAll('#view-seg [data-view]'));
   var devBtns = Array.prototype.slice.call(document.querySelectorAll('[data-dev]'));
+  var phoneBtn = $('phone'), fw = $('fw');
+
+  function clampSplit(v) { return Math.min(80, Math.max(20, v)); }
+  function isCompact() { return appEl.hasAttribute('data-compact'); }
+
+  // S.split is the editor's share of the stage, in percent
+  function applyTracks() {
+    var dir = stage.dataset.dir, rev = stage.dataset.rev === '1';
+    var a = S.split, b = 100 - S.split;
+    var tracks = rev
+      ? 'minmax(0,' + b + 'fr) 10px minmax(0,' + a + 'fr)'
+      : 'minmax(0,' + a + 'fr) 10px minmax(0,' + b + 'fr)';
+    stage.style.gridTemplateColumns = dir === 'cols' ? tracks : 'minmax(0,1fr)';
+    stage.style.gridTemplateRows = dir === 'rows' ? tracks : 'minmax(0,1fr)';
+  }
+  function applyLayout() {
+    var L = LAYOUTS[S.layout] || LAYOUTS.cols;
+    var dir = isCompact() ? 'rows' : L[0];
+    stage.dataset.dir = dir;
+    stage.dataset.rev = L[1] ? '1' : '0';
+    resizer.setAttribute('aria-orientation', dir === 'cols' ? 'vertical' : 'horizontal');
+    layoutBtns.forEach(function (b) {
+      var l = LAYOUTS[b.dataset.layout];
+      b.setAttribute('aria-pressed', String(l[0] === dir && l[1] === L[1]));
+    });
+    applyTracks();
+  }
+  layoutBtns.forEach(function (b) {
+    b.addEventListener('click', function () { S.layout = b.dataset.layout; applyLayout(); save(); });
+  });
+
+  function applyView() {
+    stage.dataset.view = S.view;
+    viewBtns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.view === S.view)); });
+  }
+  viewBtns.forEach(function (b) {
+    b.addEventListener('click', function () { S.view = b.dataset.view; applyView(); save(); });
+  });
+
   function applyDevice() {
     fw.dataset.device = S.device;
     devBtns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.dev === S.device)); });
   }
   devBtns.forEach(function (b) { b.addEventListener('click', function () { S.device = b.dataset.dev; applyDevice(); save(); }); });
 
-  function clampSplit(v) { return Math.min(80, Math.max(20, v)); }
+  function applyPhone() {
+    appEl.classList.toggle('phone', !!S.phone);
+    document.body.classList.toggle('stage-bg', !!S.phone);
+    phoneBtn.setAttribute('aria-pressed', String(!!S.phone));
+  }
+  phoneBtn.addEventListener('click', function () { S.phone = !S.phone; applyPhone(); checkCompact(); save(); });
+
+  function checkCompact() {
+    var c = appEl.clientWidth <= 820;
+    if (c !== isCompact()) { appEl.toggleAttribute('data-compact', c); applyLayout(); }
+  }
+  if (window.ResizeObserver) new ResizeObserver(checkCompact).observe(appEl);
+  else window.addEventListener('resize', checkCompact);
+
+  /* ---------- Divider (drag or arrow keys) ---------- */
   resizer.addEventListener('pointerdown', function (e) {
     e.preventDefault();
     resizer.setPointerCapture(e.pointerId);
     stage.classList.add('dragging');
-    var r = stage.getBoundingClientRect();
+    var r = stage.getBoundingClientRect(), bar = resizer.getBoundingClientRect();
+    var horizontalBar = bar.width > bar.height, rev = stage.dataset.rev === '1';
     function move(ev) {
-      var v = S.layout === 'cols' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height;
-      S.split = Math.round(clampSplit(v * 100) * 10) / 10;
-      stage.style.setProperty('--split', S.split + '%');
+      var frac = horizontalBar ? (ev.clientY - r.top) / r.height : (ev.clientX - r.left) / r.width;
+      S.split = Math.round(clampSplit((rev ? 1 - frac : frac) * 100) * 10) / 10;
+      applyTracks();
     }
     function up() {
       stage.classList.remove('dragging');
@@ -566,29 +702,27 @@
     var d = { ArrowLeft: -2, ArrowUp: -2, ArrowRight: 2, ArrowDown: 2 }[e.key];
     if (!d) return;
     e.preventDefault();
+    if (stage.dataset.rev === '1') d = -d;
     S.split = clampSplit(S.split + d);
-    stage.style.setProperty('--split', S.split + '%');
+    applyTracks();
     save();
   });
 
-  var vCode = $('v-code'), vPrev = $('v-prev');
-  function setView(v) {
-    stage.dataset.view = v;
-    vCode.setAttribute('aria-pressed', String(v === 'code'));
-    vPrev.setAttribute('aria-pressed', String(v === 'preview'));
-  }
-  vCode.addEventListener('click', function () { setView('code'); });
-  vPrev.addEventListener('click', function () { setView('preview'); });
-
   /* ---------- Boot ---------- */
   autoEl.checked = !!S.auto;
-  if (!FILES_OK(S.active)) S.active = 'html';
-  function FILES_OK(id) { return id === 'html' || id === 'css' || id === 'js'; }
+  if (['html', 'css', 'js'].indexOf(S.active) < 0) S.active = 'html';
+  if (!LAYOUTS[S.layout]) S.layout = 'cols';
+  if (['code', 'both', 'preview'].indexOf(S.view) < 0) S.view = 'both';
   S.split = clampSplit(Number(S.split) || 50);
-  applyLayout(); applyDevice();
   tabs.forEach(function (t) { t.setAttribute('aria-selected', String(t.dataset.id === S.active)); });
   ta.value = S.files[S.active];
   render();
+  applyPhone();
+  appEl.toggleAttribute('data-compact', appEl.clientWidth <= 820);
+  applyLayout();
+  applyView();
+  applyDevice();
   clearConsole();
+  setConsole(!!S.console);
   runPreview();
 })();
